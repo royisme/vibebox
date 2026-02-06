@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 
 	"vibebox/internal/backend"
@@ -156,45 +153,6 @@ func workspaceGuestFromSpec(spec backend.RuntimeSpec) string {
 		}
 	}
 	return workspaceGuestPath
-}
-
-func parseExitMarker(output, marker string) (int, bool) {
-	re := regexp.MustCompile(regexp.QuoteMeta(marker) + `(\d+)`)
-	matches := re.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 {
-		return 0, false
-	}
-	last := matches[len(matches)-1]
-	code, err := strconv.Atoi(last[1])
-	if err != nil {
-		return 0, false
-	}
-	return code, true
-}
-
-func stripExitMarker(output, marker string) string {
-	re := regexp.MustCompile(`(?m)^.*` + regexp.QuoteMeta(marker) + `\d+.*\n?`)
-	return re.ReplaceAllString(output, "")
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-func shellExports(env map[string]string) string {
-	if len(env) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, "export "+k+"="+shellQuote(env[k])+";")
-	}
-	return strings.Join(parts, " ") + " "
 }
 
 func cloneMap(in map[string]string) map[string]string {
