@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check lint test build check install-lint
+.PHONY: fmt fmt-check lint test build check install-lint sign probe-apple-vm release-local
 
 fmt:
 	@gofmt -w $$(find . -name '*.go' -type f)
@@ -24,6 +24,15 @@ test:
 build:
 	@mkdir -p bin
 	@go build -o bin/vibebox ./cmd/vibebox
+
+sign: build
+	@./scripts/sign-vibebox.sh ./bin/vibebox
+
+probe-apple-vm: sign
+	@./bin/vibebox probe --json --provider apple-vm
+
+release-local:
+	@./scripts/build-release.sh dev dist
 
 check: fmt-check lint test build
 

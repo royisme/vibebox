@@ -38,6 +38,7 @@ Legacy alias accepted as input:
 - Call `Initialize` once per project if you plan to use VM image-backed workflows.
 - Persist generated `.vibebox/config.yaml` under project root.
 - Surface init progress through `OnEvent`.
+- Configure workspace/data mounts via `InitializeRequest.Mounts` (supports multiple directories).
 
 ### 2) Non-interactive command execution (recommended for Mozi)
 - Call `Exec` for one command and read deterministic `stdout/stderr/exitCode`.
@@ -53,6 +54,7 @@ Legacy alias accepted as input:
 ### 5) Diagnostics and remediation
 - Always inspect `Diagnostics` from `Probe` / `ExecResult` / `StartResult`.
 - Surface `FixHints` directly to users for self-service remediation.
+- For relative execution paths (`Cwd: "."`, `./subdir`), ensure project root is mounted into guest.
 
 ## Example (`Exec`)
 ```go
@@ -68,10 +70,23 @@ func main() {
     ctx := context.Background()
     svc := sdk.NewService()
 
+    _, err := svc.Initialize(ctx, sdk.InitializeRequest{
+        ProjectRoot: "/path/to/project",
+        Provider: sdk.ProviderAppleVM,
+        Mounts: []sdk.Mount{
+            {Host: ".", Guest: "/workspace", Mode: "rw"},
+            {Host: "../agent-cache", Guest: "/cache", Mode: "rw"},
+        },
+    })
+    if err != nil {
+        panic(err)
+    }
+
     result, err := svc.Exec(ctx, sdk.ExecRequest{
         ProjectRoot:      "/path/to/project",
-        ProviderOverride: sdk.ProviderOff,
+        ProviderOverride: sdk.ProviderAppleVM,
         Command:          "echo hello-from-vibebox",
+        Cwd:              ".",
         TimeoutSeconds:   20,
     })
     if err != nil {
@@ -86,5 +101,4 @@ func main() {
 ```
 
 ## Current limitation
-- `apple-vm` backend still delegates execution to host `vibe` binary.
-- Target direction is native `vz` backend to remove this hard dependency.
+- `apple-vm` backend is native `vz`, but session API remains compatibility-first: repeated `ExecInSession` calls do not yet reuse one long-lived VM instance.

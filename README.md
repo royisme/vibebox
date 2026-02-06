@@ -26,7 +26,23 @@ The primary goal is compatibility with Mozi's runtime needs.
 
 - Go `1.25+`
 - For `docker` mode: Docker daemon available
-- For `apple-vm` mode: macOS host with VM prerequisites
+- For `apple-vm` mode: macOS host, Apple Virtualization support, and `com.apple.security.virtualization` entitlement on vibebox binary
+
+## Install From Release
+
+Install latest release to local bin directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/royisme/vibebox/main/scripts/install-vibebox.sh \
+  | bash -s -- --repo royisme/vibebox --version latest --bin-dir ./tools/bin
+```
+
+For pinned version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/royisme/vibebox/main/scripts/install-vibebox.sh \
+  | bash -s -- --repo royisme/vibebox --version v0.1.0 --bin-dir ./tools/bin
+```
 
 ## Quick Start (CLI)
 
@@ -45,7 +61,22 @@ vibebox up --provider auto
 
 # list official images
 vibebox images list
+
+# initialize with one-time provisioning script (executed on first VM instance creation)
+vibebox init --provision-script ./scripts/provision-minimal.sh
+
+# initialize with additional mounts
+vibebox init \
+  --mount ../agent-cache:/cache:rw \
+  --mount ../readonly-assets:/assets:ro
+
+# initialize with only explicit mounts (disable default project-root mount)
+vibebox init \
+  --no-default-mounts \
+  --mount /abs/path/workspace:/workspace:rw
 ```
+
+`--mount` format: `host:guest[:ro|rw]` (repeatable, default mode is `rw`).
 
 ## Quick Start (SDK)
 
@@ -85,6 +116,8 @@ make fmt
 make lint
 make test
 make build
+make sign
+make probe-apple-vm
 make check
 ```
 
@@ -97,3 +130,33 @@ make install-lint
 ## Documentation
 
 See `docs/README.md` for the document index.
+For Mozi/Bun integration, start with `docs/runbooks/mozi-consumer-guide.md`.
+
+## CI and Release
+
+- CI workflow: `.github/workflows/ci.yml` (lint/test/build on Ubuntu + macOS)
+- Release workflow: `.github/workflows/release.yml` (build tarballs + checksums + GitHub release assets on tag push `v*`)
+
+Create a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Local release artifact test:
+
+```bash
+./scripts/build-release.sh v0.1.0-test dist
+```
+
+## macOS apple-vm readiness
+
+`apple-vm` requires the running vibebox binary to be signed with virtualization entitlement.
+
+Use:
+
+```bash
+make sign
+make probe-apple-vm
+```

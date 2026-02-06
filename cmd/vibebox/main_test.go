@@ -83,3 +83,31 @@ func TestExecJSONMissingCommand(t *testing.T) {
 		t.Fatalf("expected error field")
 	}
 }
+
+func TestParseMountSpecs(t *testing.T) {
+	t.Parallel()
+
+	mounts, err := parseMountSpecs([]string{"./workspace:/workspace", "../cache:/cache:ro"})
+	if err != nil {
+		t.Fatalf("parse mounts: %v", err)
+	}
+	if len(mounts) != 2 {
+		t.Fatalf("expected 2 mounts, got %d", len(mounts))
+	}
+	if mounts[0].Mode != "rw" {
+		t.Fatalf("expected default rw mode, got %s", mounts[0].Mode)
+	}
+	if mounts[1].Mode != "ro" {
+		t.Fatalf("expected ro mode, got %s", mounts[1].Mode)
+	}
+}
+
+func TestParseMountSpecsInvalid(t *testing.T) {
+	t.Parallel()
+	if _, err := parseMountSpecs([]string{"bad"}); err == nil {
+		t.Fatalf("expected error for invalid mount format")
+	}
+	if _, err := parseMountSpecs([]string{"a:b:xx"}); err == nil {
+		t.Fatalf("expected error for invalid mount mode")
+	}
+}

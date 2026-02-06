@@ -44,14 +44,18 @@ Legacy alias accepted:
 2. Stateful backend support:
 - `off`: implemented.
 - `docker`: implemented using long-lived container + `docker exec`.
-- `apple-vm`: transitional session mode implemented via delegated backend.
+- `apple-vm`: native `vz` backend implemented (session behavior keeps compatibility mode).
+
+3. Multi-directory mount support:
+- `docker` and `apple-vm` both honor `config.mounts`.
+- `Initialize` now supports mount policy and optional removal of default mount.
 
 ### Remaining
-1. macOS backend still delegates to `vibe`.
-- Works as transitional adapter but remains an external dependency.
-
-2. CLI bridge currently focuses on `probe/exec` JSON.
+1. CLI bridge currently focuses on `probe/exec` JSON.
 - Session lifecycle over CLI JSON can be added if Mozi requires process-boundary sessions.
+
+2. `apple-vm` session lifecycle is not yet a long-lived reusable VM.
+- Current behavior is deterministic and Mozi-compatible for `exec`, but repeated session commands still run isolated VM lifecycles.
 
 ## Required Contract (now available)
 
@@ -82,4 +86,4 @@ func (s *Service) Exec(ctx context.Context, req ExecRequest) (ExecResult, error)
 - [x] `auto` available as selection strategy.
 - [x] Errors include actionable diagnostics (`FixHints`).
 - [x] Session lifecycle API available in SDK.
-- [ ] Native `vz`-based `apple-vm` backend replaces delegated `vibe`.
+- [x] Native `vz`-based `apple-vm` backend replaces delegated `vibe`.

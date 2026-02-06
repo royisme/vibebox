@@ -15,6 +15,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	cfg.Provider = ProviderDocker
 	cfg.VM.ImageID = "debian-13-nocloud-arm64"
 	cfg.VM.ImageVersion = "20260112-2355"
+	cfg.VM.ProvisionScript = "./scripts/provision-minimal.sh"
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("save: %v", err)
@@ -30,6 +31,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.VM.ImageID != cfg.VM.ImageID {
 		t.Fatalf("image id mismatch: got %s", loaded.VM.ImageID)
+	}
+	if loaded.VM.ProvisionScript != cfg.VM.ProvisionScript {
+		t.Fatalf("provision script mismatch: got %s", loaded.VM.ProvisionScript)
 	}
 }
 

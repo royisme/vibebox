@@ -56,6 +56,8 @@ type VMConfig struct {
 	DiskGB       int    `yaml:"disk_gb"`
 	CPUs         int    `yaml:"cpus"`
 	RAMMB        int    `yaml:"ram_mb"`
+	// ProvisionScript is an optional host script path executed once when creating project instance disk.
+	ProvisionScript string `yaml:"provision_script,omitempty"`
 }
 
 // DockerConfig stores Docker backend settings.

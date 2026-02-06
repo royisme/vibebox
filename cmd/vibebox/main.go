@@ -43,22 +43,35 @@ func runWithIO(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		var cpus int
 		var ramMB int
 		var diskGB int
+		var provisionScript string
+		var mounts mountValues
+		var noDefaultMounts bool
 		fs.BoolVar(&nonInteractive, "non-interactive", false, "disable TUI wizard")
 		fs.StringVar(&imageID, "image-id", "", "official image id")
 		fs.StringVar(&provider, "provider", string(config.ProviderAuto), "provider: off|apple-vm|docker|auto")
 		fs.IntVar(&cpus, "cpus", 2, "vm CPU count")
 		fs.IntVar(&ramMB, "ram-mb", 2048, "vm memory in MiB")
 		fs.IntVar(&diskGB, "disk-gb", 20, "vm disk in GiB")
+		fs.StringVar(&provisionScript, "provision-script", "", "host path to script executed once in initial VM setup")
+		fs.Var(&mounts, "mount", "mount spec host:guest[:ro|rw] (repeatable)")
+		fs.BoolVar(&noDefaultMounts, "no-default-mounts", false, "disable default project mount and only use --mount values")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 1, err
 		}
+		parsedMounts, err := parseMountSpecs(mounts)
+		if err != nil {
+			return 1, err
+		}
 		return 0, a.Init(ctx, app.InitOptions{
-			NonInteractive: nonInteractive,
-			ImageID:        imageID,
-			Provider:       config.Provider(provider),
-			CPUs:           cpus,
-			RAMMB:          ramMB,
-			DiskGB:         diskGB,
+			NonInteractive:  nonInteractive,
+			ImageID:         imageID,
+			Provider:        config.Provider(provider),
+			CPUs:            cpus,
+			RAMMB:           ramMB,
+			DiskGB:          diskGB,
+			ProvisionScript: provisionScript,
+			NoDefaultMounts: noDefaultMounts,
+			Mounts:          parsedMounts,
 		})
 	case "up":
 		fs := flag.NewFlagSet("up", flag.ContinueOnError)
@@ -207,6 +220,46 @@ func parseEnv(values []string) (map[string]string, error) {
 	return out, nil
 }
 
+type mountValues []string
+
+func (m *mountValues) String() string {
+	return strings.Join(*m, ",")
+}
+
+func (m *mountValues) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+func parseMountSpecs(values []string) ([]config.Mount, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]config.Mount, 0, len(values))
+	for _, v := range values {
+		parts := strings.Split(v, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return nil, fmt.Errorf("invalid mount value %q (expected host:guest[:ro|rw])", v)
+		}
+		mode := "rw"
+		if len(parts) == 3 {
+			mode = parts[2]
+		}
+		if mode != "ro" && mode != "rw" {
+			return nil, fmt.Errorf("invalid mount mode %q in %q (expected ro or rw)", mode, v)
+		}
+		if parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("invalid mount value %q (host and guest are required)", v)
+		}
+		out = append(out, config.Mount{
+			Host:  parts[0],
+			Guest: parts[1],
+			Mode:  mode,
+		})
+	}
+	return out, nil
+}
+
 func runExec(ctx context.Context, svc *sdk.Service, args []string, stdout io.Writer, stderr io.Writer) (int, error) {
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -338,6 +391,11 @@ Usage:
 
 Common flags:
   --provider off|apple-vm|docker|auto
+
+Init flags:
+  --provision-script <path>      Run script once when creating instance disk
+  --mount host:guest[:ro|rw]     Add mount (repeatable)
+  --no-default-mounts            Disable default project-root mount
 `)
 }
 

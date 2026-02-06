@@ -1,14 +1,11 @@
 package macos
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,7 +13,12 @@ import (
 	"vibebox/internal/backend"
 )
 
-// Backend implements macOS VM runtime via a delegated vibe command.
+const (
+	workspaceGuestPath = "/workspace"
+	exitCodeMarker     = "__VIBEBOX_EXIT_CODE__"
+)
+
+// Backend implements the apple-vm provider.
 type Backend struct{}
 
 type sessionHandle struct {
@@ -32,42 +34,11 @@ func (b *Backend) Name() string {
 	return "apple-vm"
 }
 
-func (b *Backend) Probe(ctx context.Context) backend.ProbeResult {
-	if runtime.GOOS != "darwin" {
-		return backend.ProbeResult{
-			Available: false,
-			Reason:    "apple-vm backend is only available on darwin",
-			FixHints:  []string{"use provider=docker or provider=off on non-darwin hosts"},
-		}
-	}
-	if _, err := exec.LookPath("vibe"); err != nil {
-		return backend.ProbeResult{
-			Available: false,
-			Reason:    "vibe binary not found",
-			FixHints: []string{
-				"install vibe from https://github.com/lynaghk/vibe",
-				"or use provider=docker",
-			},
-		}
-	}
-
-	// A lightweight check to ensure Virtualization entitlements are likely usable.
-	if _, err := exec.LookPath("codesign"); err != nil {
-		return backend.ProbeResult{
-			Available: false,
-			Reason:    "codesign command not found",
-			FixHints:  []string{"install Xcode command line tools"},
-		}
-	}
-
-	_ = ctx
-	return backend.ProbeResult{Available: true}
-}
-
 func (b *Backend) Prepare(ctx context.Context, spec backend.RuntimeSpec) error {
 	if _, err := os.Stat(spec.BaseRawPath); err != nil {
 		return fmt.Errorf("base raw image missing: %w", err)
 	}
+	created := false
 	if _, err := os.Stat(spec.InstanceRaw); err == nil {
 		return nil
 	}
@@ -77,88 +48,27 @@ func (b *Backend) Prepare(ctx context.Context, spec backend.RuntimeSpec) error {
 	if err := copyFile(spec.BaseRawPath, spec.InstanceRaw); err != nil {
 		return fmt.Errorf("create instance disk: %w", err)
 	}
-	_ = ctx
-	return nil
-}
-
-func (b *Backend) Start(ctx context.Context, spec backend.RuntimeSpec) error {
-	projectGuest := "/workspace"
-
-	args := []string{
-		spec.InstanceRaw,
-		"--no-default-mounts",
-		"--mount", fmt.Sprintf("%s:%s:read-write", spec.ProjectRoot, projectGuest),
-		"--send", "cd /workspace",
-		"--cpus", fmt.Sprintf("%d", spec.Config.VM.CPUs),
-		"--ram", fmt.Sprintf("%d", spec.Config.VM.RAMMB),
-	}
-
-	cmd := exec.CommandContext(ctx, "vibe", args...)
-	cmd.Stdin = spec.IO.Stdin
-	cmd.Stdout = spec.IO.Stdout
-	cmd.Stderr = spec.IO.Stderr
-	if cmd.Stdin == nil {
-		cmd.Stdin = os.Stdin
-	}
-	if cmd.Stdout == nil {
-		cmd.Stdout = os.Stdout
-	}
-	if cmd.Stderr == nil {
-		cmd.Stderr = os.Stderr
-	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run vibe backend: %w", err)
+	created = true
+	if created {
+		if err := b.provisionInstance(ctx, spec); err != nil {
+			_ = os.Remove(spec.InstanceRaw)
+			return fmt.Errorf("provision instance disk: %w", err)
+		}
 	}
 	return nil
-}
-
-func (b *Backend) Exec(ctx context.Context, spec backend.RuntimeSpec, req backend.ExecRequest) (backend.ExecResult, error) {
-	projectGuest := "/workspace"
-	guestCwd, err := resolveVMGuestCwd(spec.ProjectRoot, req.Cwd, projectGuest)
-	if err != nil {
-		return backend.ExecResult{}, err
-	}
-
-	const marker = "__VIBEBOX_EXIT_CODE__"
-	envExports := shellExports(req.Env)
-	command := fmt.Sprintf("cd %s && %s { %s ; }; rc=$?; echo %s$rc; poweroff", shellQuote(guestCwd), envExports, req.Command, marker)
-	args := []string{
-		spec.InstanceRaw,
-		"--no-default-mounts",
-		"--mount", fmt.Sprintf("%s:%s:read-write", spec.ProjectRoot, projectGuest),
-		"--send", command,
-		"--cpus", fmt.Sprintf("%d", spec.Config.VM.CPUs),
-		"--ram", fmt.Sprintf("%d", spec.Config.VM.RAMMB),
-	}
-
-	cmd := exec.CommandContext(ctx, "vibe", args...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-
-	result := backend.ExecResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: 0,
-	}
-	if exitCode, ok := parseExitMarker(result.Stdout, marker); ok {
-		result.ExitCode = exitCode
-		result.Stdout = stripExitMarker(result.Stdout, marker)
-		return result, nil
-	}
-
-	if runErr == nil {
-		return result, nil
-	}
-	return result, fmt.Errorf("vibe exec failed: %w", runErr)
 }
 
 func (b *Backend) StartSession(ctx context.Context, spec backend.RuntimeSpec, req backend.SessionStartRequest) (backend.SessionHandle, error) {
 	_ = ctx
-	projectGuest := "/workspace"
-	guestCwd, err := resolveVMGuestCwd(spec.ProjectRoot, req.Cwd, projectGuest)
+	workspaceGuest := workspaceGuestFromSpec(spec)
+	if req.Cwd != "" && !strings.HasPrefix(req.Cwd, "/") {
+		projectGuest, ok := projectRootGuestFromSpec(spec)
+		if !ok {
+			return nil, fmt.Errorf("relative cwd requires a mount for project root %s", spec.ProjectRoot)
+		}
+		workspaceGuest = projectGuest
+	}
+	guestCwd, err := resolveVMGuestCwd(spec.ProjectRoot, req.Cwd, workspaceGuest)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +103,7 @@ func (b *Backend) StopSession(ctx context.Context, spec backend.RuntimeSpec, han
 	_ = ctx
 	_ = spec
 	_ = handle
-	// Transitional mode: delegated vibe backend does not keep a reusable VM session yet.
+	// Transitional mode: each exec runs in an isolated VM lifecycle.
 	return nil
 }
 
@@ -214,6 +124,38 @@ func resolveVMGuestCwd(projectRoot, requested, workspaceGuest string) (string, e
 		return "", fmt.Errorf("cwd %s escapes project root %s", hostPath, projectRoot)
 	}
 	return filepath.ToSlash(filepath.Join(workspaceGuest, rel)), nil
+}
+
+func projectRootGuestFromSpec(spec backend.RuntimeSpec) (string, bool) {
+	projectRootClean := filepath.Clean(spec.ProjectRoot)
+	for _, m := range spec.Config.Mounts {
+		if m.Guest == "" {
+			continue
+		}
+		hostPath := m.Host
+		if hostPath == "" {
+			continue
+		}
+		if !filepath.IsAbs(hostPath) {
+			hostPath = filepath.Join(spec.ProjectRoot, hostPath)
+		}
+		if filepath.Clean(hostPath) == projectRootClean {
+			return m.Guest, true
+		}
+	}
+	return "", false
+}
+
+func workspaceGuestFromSpec(spec backend.RuntimeSpec) string {
+	if guest, ok := projectRootGuestFromSpec(spec); ok {
+		return guest
+	}
+	for _, m := range spec.Config.Mounts {
+		if m.Guest != "" {
+			return m.Guest
+		}
+	}
+	return workspaceGuestPath
 }
 
 func parseExitMarker(output, marker string) (int, bool) {

@@ -34,12 +34,15 @@ func New(stdout, stderr io.Writer) *App {
 
 // InitOptions controls `vibebox init` behavior.
 type InitOptions struct {
-	NonInteractive bool
-	ImageID        string
-	Provider       config.Provider
-	CPUs           int
-	RAMMB          int
-	DiskGB         int
+	NonInteractive  bool
+	ImageID         string
+	Provider        config.Provider
+	CPUs            int
+	RAMMB           int
+	DiskGB          int
+	ProvisionScript string
+	NoDefaultMounts bool
+	Mounts          []config.Mount
 }
 
 // UpOptions controls `vibebox up` behavior.
@@ -89,6 +92,13 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 	}
 	if opts.DiskGB > 0 {
 		cfg.VM.DiskGB = opts.DiskGB
+	}
+	cfg.VM.ProvisionScript = opts.ProvisionScript
+	if opts.NoDefaultMounts {
+		cfg.Mounts = nil
+	}
+	if len(opts.Mounts) > 0 {
+		cfg.Mounts = append(cfg.Mounts, opts.Mounts...)
 	}
 	if err := cfg.Validate(); err != nil {
 		return err

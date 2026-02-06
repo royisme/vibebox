@@ -27,7 +27,13 @@ Useful flags:
 
 ```bash
 vibebox init --non-interactive --image-id debian-13-nocloud-arm64 --provider auto
+vibebox init --provision-script ./scripts/provision-minimal.sh
+vibebox init --mount ../agent-cache:/cache:rw --mount ../assets:/assets:ro
+vibebox init --no-default-mounts --mount /abs/workspace:/workspace:rw
 ```
+
+`--mount` format is `host:guest[:ro|rw]` and can be repeated.
+When `--no-default-mounts` is set, only explicitly provided mounts are used.
 
 ### SDK
 
@@ -36,11 +42,19 @@ svc := vibebox.NewService()
 _, err := svc.Initialize(ctx, vibebox.InitializeRequest{
     ProjectRoot: "/path/to/project",
     Provider:    vibebox.ProviderAuto,
+    ProvisionScript: "./scripts/provision-minimal.sh",
+    Mounts: []vibebox.Mount{
+        {Host: ".", Guest: "/workspace", Mode: "rw"},
+        {Host: "../agent-cache", Guest: "/cache", Mode: "rw"},
+    },
     OnEvent: func(e vibebox.Event) {
         // progress hook
     },
 })
 ```
+
+`ProvisionScript` runs once when the project instance disk is first created.
+It is skipped on later runs unless `instance.raw` is recreated.
 
 ## 3. Execute One Command (Recommended for Agent Runtimes)
 
@@ -138,5 +152,8 @@ make check
 
 ## 8. Notes
 
-- `apple-vm` currently uses a delegated adapter to `vibe` as an interim step.
-- Long-term target is a native `vz` backend.
+- `apple-vm` uses native `vz` (Apple Virtualization.framework) backend.
+- Running `apple-vm` requires virtualization entitlement (`com.apple.security.virtualization`) on the vibebox binary.
+- Session API for `apple-vm` currently keeps compatibility semantics (session defaults + per-command isolated VM lifecycle).
+- Both `docker` and `apple-vm` use `config.mounts`; multiple host directories are supported.
+- Relative `Cwd` (for `Exec`/session execution) assumes project root is mounted. If not, use absolute guest `Cwd`.

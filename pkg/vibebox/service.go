@@ -125,6 +125,13 @@ func (s *Service) Initialize(ctx context.Context, req InitializeRequest) (Initia
 	if req.DiskGB > 0 {
 		cfg.VM.DiskGB = req.DiskGB
 	}
+	cfg.VM.ProvisionScript = req.ProvisionScript
+	if req.NoDefaultMounts {
+		cfg.Mounts = nil
+	}
+	if len(req.Mounts) > 0 {
+		cfg.Mounts = append(cfg.Mounts, toInternalMounts(req.Mounts)...)
+	}
 	if err := cfg.Validate(); err != nil {
 		return InitializeResult{}, err
 	}
@@ -632,6 +639,18 @@ func toPublicImage(d image.Descriptor) Image {
 		URL:         d.URL,
 		SizeBytes:   d.SizeBytes,
 	}
+}
+
+func toInternalMounts(in []Mount) []config.Mount {
+	out := make([]config.Mount, 0, len(in))
+	for _, m := range in {
+		out = append(out, config.Mount{
+			Host:  m.Host,
+			Guest: m.Guest,
+			Mode:  m.Mode,
+		})
+	}
+	return out
 }
 
 func emit(handler EventHandler, e Event) {

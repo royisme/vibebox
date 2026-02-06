@@ -33,6 +33,13 @@ type Image struct {
 	SizeBytes   int64
 }
 
+// Mount describes one host-to-guest mount mapping.
+type Mount struct {
+	Host  string
+	Guest string
+	Mode  string
+}
+
 // Event is emitted during long-running operations.
 type Event struct {
 	Kind       string
@@ -52,13 +59,16 @@ type EventHandler func(Event)
 
 // InitializeRequest configures project initialization.
 type InitializeRequest struct {
-	ProjectRoot string
-	ImageID     string
-	Provider    Provider
-	CPUs        int
-	RAMMB       int
-	DiskGB      int
-	OnEvent     EventHandler
+	ProjectRoot     string
+	ImageID         string
+	Provider        Provider
+	CPUs            int
+	RAMMB           int
+	DiskGB          int
+	ProvisionScript string
+	NoDefaultMounts bool
+	Mounts          []Mount
+	OnEvent         EventHandler
 }
 
 // InitializeResult describes generated artifacts after init.

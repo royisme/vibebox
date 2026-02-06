@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (implementation-ready)
+Implemented (Phase 1 + Phase 2 completed; apple-vm native `vz` backend available)
 
 ## Problem
 
@@ -26,8 +26,7 @@ Phase 1 scope (required for current Mozi integration):
 
 Out of scope in this runbook:
 
-1. Native VZ rewrite (apple backend still delegates to `vibe` for now).
-2. Full session lifecycle API (`StartSession/ExecInSession/StopSession`).
+1. CLI JSON bridge for full session lifecycle (`session start/exec/stop`) across process boundaries.
 
 ## Contract Design
 
@@ -64,7 +63,7 @@ Error JSON shape (still valid JSON on stdout):
   "error": "requested provider apple-vm is unavailable",
   "selected": "",
   "diagnostics": {
-    "apple-vm": { "available": false, "reason": "vibe binary not found", "fixHints": ["install vibe"] }
+    "apple-vm": { "available": false, "reason": "vibebox binary is missing virtualization entitlement", "fixHints": ["sign binary with com.apple.security.virtualization entitlement"] }
   }
 }
 ```
