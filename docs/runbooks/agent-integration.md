@@ -18,6 +18,10 @@
 - `Probe(ctx, provider) (ProbeResult, error)`
 - `Start(ctx, StartRequest) (StartResult, error)`
 - `Exec(ctx, ExecRequest) (ExecResult, error)`
+- `StartSession(ctx, StartSessionRequest) (Session, error)`
+- `ExecInSession(ctx, ExecInSessionRequest) (ExecResult, error)`
+- `StopSession(ctx, StopSessionRequest) error`
+- `GetSession(ctx, sessionID) (Session, error)`
 
 ## Provider model
 - `off` (host execution)
@@ -39,10 +43,14 @@ Legacy alias accepted as input:
 - Call `Exec` for one command and read deterministic `stdout/stderr/exitCode`.
 - Prefer `ProviderOverride: off|apple-vm|docker` based on policy.
 
-### 3) Interactive runtime startup (optional)
+### 3) Reusable session execution (advanced)
+- Call `StartSession` once, then `ExecInSession` repeatedly.
+- Call `StopSession` when the workload is complete.
+
+### 4) Interactive runtime startup (optional)
 - Call `Start` for interactive runtime sessions.
 
-### 4) Diagnostics and remediation
+### 5) Diagnostics and remediation
 - Always inspect `Diagnostics` from `Probe` / `ExecResult` / `StartResult`.
 - Surface `FixHints` directly to users for self-service remediation.
 

@@ -16,6 +16,11 @@ import (
 // Backend executes commands directly on host with conservative policy defaults.
 type Backend struct{}
 
+type sessionHandle struct {
+	cwd string
+	env map[string]string
+}
+
 func New() *Backend {
 	return &Backend{}
 }
@@ -91,6 +96,46 @@ func (b *Backend) Exec(ctx context.Context, spec backend.RuntimeSpec, req backen
 	return result, err
 }
 
+func (b *Backend) StartSession(ctx context.Context, spec backend.RuntimeSpec, req backend.SessionStartRequest) (backend.SessionHandle, error) {
+	_ = ctx
+	hostCwd, err := resolveHostCwd(spec.ProjectRoot, req.Cwd)
+	if err != nil {
+		return nil, err
+	}
+	return sessionHandle{
+		cwd: hostCwd,
+		env: cloneMap(req.Env),
+	}, nil
+}
+
+func (b *Backend) ExecInSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle, req backend.ExecRequest) (backend.ExecResult, error) {
+	h, ok := handle.(sessionHandle)
+	if !ok {
+		return backend.ExecResult{}, fmt.Errorf("invalid off session handle")
+	}
+	effectiveCwd := req.Cwd
+	if effectiveCwd == "" {
+		effectiveCwd = h.cwd
+	}
+	effectiveEnv := cloneMap(h.env)
+	for k, v := range req.Env {
+		effectiveEnv[k] = v
+	}
+	return b.Exec(ctx, spec, backend.ExecRequest{
+		Command: req.Command,
+		Cwd:     effectiveCwd,
+		Env:     effectiveEnv,
+		Timeout: req.Timeout,
+	})
+}
+
+func (b *Backend) StopSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle) error {
+	_ = ctx
+	_ = spec
+	_ = handle
+	return nil
+}
+
 func resolveHostCwd(projectRoot string, requested string) (string, error) {
 	if requested == "" {
 		return projectRoot, nil
@@ -147,6 +192,17 @@ func mergeRestrictedEnv(extra map[string]string) []string {
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, k+"="+base[k])
+	}
+	return out
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

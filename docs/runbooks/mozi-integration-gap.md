@@ -15,6 +15,10 @@ Mozi sandbox modes:
 - `Probe(ctx, provider) (ProbeResult, error)`
 - `Start(ctx, StartRequest) (StartResult, error)`
 - `Exec(ctx, ExecRequest) (ExecResult, error)`
+- `StartSession(ctx, StartSessionRequest) (Session, error)`
+- `ExecInSession(ctx, ExecInSessionRequest) (ExecResult, error)`
+- `StopSession(ctx, StopSessionRequest) error`
+- `GetSession(ctx, sessionID) (Session, error)`
 
 Provider values:
 - `off`
@@ -33,12 +37,21 @@ Legacy alias accepted:
 3. Backend interface supports per-command execution: done (`Backend.Exec`).
 4. `auto` remains selector-only strategy: done.
 
-### Remaining
-1. Session lifecycle APIs not implemented yet.
-- Missing `StartSession / ExecInSession / StopSession`.
+### Closed (Phase 2)
+1. Session lifecycle APIs in SDK: done.
+- `StartSession / ExecInSession / StopSession / GetSession` are available.
 
-2. macOS backend still delegates to `vibe`.
+2. Stateful backend support:
+- `off`: implemented.
+- `docker`: implemented using long-lived container + `docker exec`.
+- `apple-vm`: transitional session mode implemented via delegated backend.
+
+### Remaining
+1. macOS backend still delegates to `vibe`.
 - Works as transitional adapter but remains an external dependency.
+
+2. CLI bridge currently focuses on `probe/exec` JSON.
+- Session lifecycle over CLI JSON can be added if Mozi requires process-boundary sessions.
 
 ## Required Contract (now available)
 
@@ -68,5 +81,5 @@ func (s *Service) Exec(ctx context.Context, req ExecRequest) (ExecResult, error)
 - [x] `off/apple-vm/docker` modes are explicit.
 - [x] `auto` available as selection strategy.
 - [x] Errors include actionable diagnostics (`FixHints`).
-- [ ] Session lifecycle API available.
+- [x] Session lifecycle API available in SDK.
 - [ ] Native `vz`-based `apple-vm` backend replaces delegated `vibe`.

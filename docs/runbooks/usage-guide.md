@@ -69,7 +69,34 @@ fmt.Println(res.Stderr)
 - `Selected` provider
 - backend `Diagnostics`
 
-## 4. Start Interactive Session
+
+## 4. Reusable Sessions (Phase 2)
+
+Use session APIs when you need repeated commands with shared sandbox context.
+
+```go
+session, err := svc.StartSession(ctx, vibebox.StartSessionRequest{
+    ProjectRoot:      "/path/to/project",
+    ProviderOverride: vibebox.ProviderDocker,
+    Cwd:              ".",
+})
+if err != nil {
+    panic(err)
+}
+
+res, err := svc.ExecInSession(ctx, vibebox.ExecInSessionRequest{
+    SessionID: session.ID,
+    Command:   "echo from-session",
+})
+if err != nil {
+    panic(err)
+}
+fmt.Println(res.ExitCode, res.Stdout)
+
+_ = svc.StopSession(ctx, vibebox.StopSessionRequest{SessionID: session.ID})
+```
+
+## 5. Start Interactive Session
 
 Use interactive mode when a shell is required.
 
@@ -88,7 +115,7 @@ _, err := svc.Start(ctx, vibebox.StartRequest{
 })
 ```
 
-## 5. Diagnose Backend Availability
+## 6. Diagnose Backend Availability
 
 Use `Probe` before execution to surface remediation hints.
 
@@ -99,7 +126,7 @@ if err != nil {
 }
 ```
 
-## 6. Quality Workflow
+## 7. Quality Workflow
 
 ```bash
 make fmt
@@ -109,7 +136,7 @@ make build
 make check
 ```
 
-## 7. Notes
+## 8. Notes
 
 - `apple-vm` currently uses a delegated adapter to `vibe` as an interim step.
 - Long-term target is a native `vz` backend.

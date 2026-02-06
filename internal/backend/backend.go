@@ -40,6 +40,16 @@ type ExecResult struct {
 	ExitCode int
 }
 
+// SessionHandle is backend-specific opaque session data.
+type SessionHandle any
+
+// SessionStartRequest configures creation of a reusable session.
+type SessionStartRequest struct {
+	SessionID string
+	Cwd       string
+	Env       map[string]string
+}
+
 // ProbeResult reports backend availability.
 type ProbeResult struct {
 	Available bool
@@ -54,4 +64,11 @@ type Backend interface {
 	Prepare(ctx context.Context, spec RuntimeSpec) error
 	Start(ctx context.Context, spec RuntimeSpec) error
 	Exec(ctx context.Context, spec RuntimeSpec, req ExecRequest) (ExecResult, error)
+}
+
+// SessionBackend is an optional extension for stateful session lifecycle support.
+type SessionBackend interface {
+	StartSession(ctx context.Context, spec RuntimeSpec, req SessionStartRequest) (SessionHandle, error)
+	ExecInSession(ctx context.Context, spec RuntimeSpec, handle SessionHandle, req ExecRequest) (ExecResult, error)
+	StopSession(ctx context.Context, spec RuntimeSpec, handle SessionHandle) error
 }

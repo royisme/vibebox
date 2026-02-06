@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,12 @@ import (
 
 // Backend implements Docker runtime.
 type Backend struct{}
+
+type sessionHandle struct {
+	containerName string
+	defaultCwd    string
+	defaultEnv    map[string]string
+}
 
 func New() *Backend {
 	return &Backend{}
@@ -163,6 +170,110 @@ func (b *Backend) Exec(ctx context.Context, spec backend.RuntimeSpec, req backen
 	return result, err
 }
 
+func (b *Backend) StartSession(ctx context.Context, spec backend.RuntimeSpec, req backend.SessionStartRequest) (backend.SessionHandle, error) {
+	workspaceGuest := "/workspace"
+	guestCwd, err := resolveGuestCwd(spec.ProjectRoot, req.Cwd, workspaceGuest)
+	if err != nil {
+		return nil, err
+	}
+	containerName := "vibebox-s-" + sanitizeName(spec.ProjectName) + "-" + sanitizeName(req.SessionID)
+
+	args := []string{"run", "-d", "--rm", "--name", containerName, "-e", "IS_SANDBOX=1"}
+	mountArgs, err := buildMountArgs(spec)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, mountArgs...)
+	for _, e := range envList(req.Env) {
+		args = append(args, "-e", e)
+	}
+	args = append(args, "-w", guestCwd, spec.Config.Docker.Image, "sleep", "infinity")
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("start docker session: %w (%s)", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return sessionHandle{
+		containerName: containerName,
+		defaultCwd:    guestCwd,
+		defaultEnv:    cloneMap(req.Env),
+	}, nil
+}
+
+func (b *Backend) ExecInSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle, req backend.ExecRequest) (backend.ExecResult, error) {
+	h, ok := handle.(sessionHandle)
+	if !ok {
+		return backend.ExecResult{}, fmt.Errorf("invalid docker session handle")
+	}
+	guestCwd := req.Cwd
+	if guestCwd == "" {
+		guestCwd = h.defaultCwd
+	} else {
+		var err error
+		guestCwd, err = resolveGuestCwd(spec.ProjectRoot, req.Cwd, "/workspace")
+		if err != nil {
+			return backend.ExecResult{}, err
+		}
+	}
+
+	env := cloneMap(h.defaultEnv)
+	for k, v := range req.Env {
+		env[k] = v
+	}
+
+	args := []string{"exec", "-i", "-w", guestCwd}
+	for _, e := range envList(env) {
+		args = append(args, "-e", e)
+	}
+	args = append(args, h.containerName, "/bin/bash", "-lc", req.Command)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	result := backend.ExecResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: 0,
+	}
+	if err == nil {
+		return result, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		result.ExitCode = exitErr.ExitCode()
+		return result, nil
+	}
+	return result, err
+}
+
+func (b *Backend) StopSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle) error {
+	_ = spec
+	h, ok := handle.(sessionHandle)
+	if !ok {
+		return fmt.Errorf("invalid docker session handle")
+	}
+	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", h.containerName)
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.ToLower(stderr.String())
+		if strings.Contains(msg, "no such container") {
+			return nil
+		}
+		return fmt.Errorf("stop docker session: %w (%s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 func resolveGuestCwd(projectRoot, requested, workspaceGuest string) (string, error) {
 	if requested == "" {
 		return workspaceGuest, nil
@@ -194,6 +305,32 @@ func envList(extra map[string]string) []string {
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, k+"="+extra[k])
+	}
+	return out
+}
+
+func buildMountArgs(spec backend.RuntimeSpec) ([]string, error) {
+	args := make([]string, 0, len(spec.Config.Mounts)*2)
+	for _, m := range spec.Config.Mounts {
+		hostPath := m.Host
+		if !filepath.IsAbs(hostPath) {
+			hostPath = filepath.Join(spec.ProjectRoot, hostPath)
+		}
+		if _, err := os.Stat(hostPath); err != nil {
+			return nil, fmt.Errorf("mount host path does not exist: %s", hostPath)
+		}
+		args = append(args, "-v", fmt.Sprintf("%s:%s:%s", hostPath, m.Guest, m.Mode))
+	}
+	return args, nil
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

@@ -19,6 +19,11 @@ import (
 // Backend implements macOS VM runtime via a delegated vibe command.
 type Backend struct{}
 
+type sessionHandle struct {
+	defaultCwd string
+	defaultEnv map[string]string
+}
+
 func New() *Backend {
 	return &Backend{}
 }
@@ -150,6 +155,48 @@ func (b *Backend) Exec(ctx context.Context, spec backend.RuntimeSpec, req backen
 	return result, fmt.Errorf("vibe exec failed: %w", runErr)
 }
 
+func (b *Backend) StartSession(ctx context.Context, spec backend.RuntimeSpec, req backend.SessionStartRequest) (backend.SessionHandle, error) {
+	_ = ctx
+	projectGuest := "/workspace"
+	guestCwd, err := resolveVMGuestCwd(spec.ProjectRoot, req.Cwd, projectGuest)
+	if err != nil {
+		return nil, err
+	}
+	return sessionHandle{
+		defaultCwd: guestCwd,
+		defaultEnv: cloneMap(req.Env),
+	}, nil
+}
+
+func (b *Backend) ExecInSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle, req backend.ExecRequest) (backend.ExecResult, error) {
+	h, ok := handle.(sessionHandle)
+	if !ok {
+		return backend.ExecResult{}, fmt.Errorf("invalid apple-vm session handle")
+	}
+	effectiveCwd := req.Cwd
+	if effectiveCwd == "" {
+		effectiveCwd = h.defaultCwd
+	}
+	env := cloneMap(h.defaultEnv)
+	for k, v := range req.Env {
+		env[k] = v
+	}
+	return b.Exec(ctx, spec, backend.ExecRequest{
+		Command: req.Command,
+		Cwd:     effectiveCwd,
+		Env:     env,
+		Timeout: req.Timeout,
+	})
+}
+
+func (b *Backend) StopSession(ctx context.Context, spec backend.RuntimeSpec, handle backend.SessionHandle) error {
+	_ = ctx
+	_ = spec
+	_ = handle
+	// Transitional mode: delegated vibe backend does not keep a reusable VM session yet.
+	return nil
+}
+
 func resolveVMGuestCwd(projectRoot, requested, workspaceGuest string) (string, error) {
 	if requested == "" {
 		return workspaceGuest, nil
@@ -206,6 +253,17 @@ func shellExports(env map[string]string) string {
 		parts = append(parts, "export "+k+"="+shellQuote(env[k])+";")
 	}
 	return strings.Join(parts, " ") + " "
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func copyFile(src, dst string) error {

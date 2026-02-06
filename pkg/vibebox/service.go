@@ -2,11 +2,14 @@ package vibebox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"vibebox/internal/backend"
@@ -19,11 +22,26 @@ import (
 )
 
 // Service is the public application-layer entrypoint for embedding vibebox.
-type Service struct{}
+type Service struct {
+	mu       sync.RWMutex
+	sessions map[string]*managedSession
+}
+
+type managedSession struct {
+	session        Session
+	backend        backend.Backend
+	sessionBackend backend.SessionBackend
+	handle         backend.SessionHandle
+	spec           backend.RuntimeSpec
+	defaultCwd     string
+	defaultEnv     map[string]string
+}
 
 // NewService creates a new application service.
 func NewService() *Service {
-	return &Service{}
+	return &Service{
+		sessions: map[string]*managedSession{},
+	}
 }
 
 // ListImages returns official white-listed images for the provided architecture.
@@ -295,6 +313,170 @@ func (s *Service) Exec(ctx context.Context, req ExecRequest) (ExecResult, error)
 	return result, nil
 }
 
+// StartSession creates a reusable sandbox session for repeated command execution.
+func (s *Service) StartSession(ctx context.Context, req StartSessionRequest) (Session, error) {
+	projectRoot, cfg, baseRaw, err := s.resolveProjectRuntime(req.ProjectRoot, req.ProviderOverride, false)
+	if err != nil {
+		return Session{}, err
+	}
+
+	selection, spec, err := s.selectBackendAndSpec(ctx, cfg, req.ProviderOverride, projectRoot, baseRaw, backend.IOStreams{})
+	if err != nil {
+		return Session{}, err
+	}
+
+	emit(req.OnEvent, Event{Kind: "session.start.prepare", Message: "preparing backend"})
+	if err := selection.Backend.Prepare(ctx, spec); err != nil {
+		return Session{}, err
+	}
+
+	sessionID, err := newSessionID()
+	if err != nil {
+		return Session{}, err
+	}
+
+	var sessionHandle backend.SessionHandle
+	var sessionBackend backend.SessionBackend
+	if sb, ok := selection.Backend.(backend.SessionBackend); ok {
+		sessionBackend = sb
+		emit(req.OnEvent, Event{Kind: "session.start.backend", Message: fmt.Sprintf("starting session on %s", selection.Backend.Name())})
+		sessionHandle, err = sb.StartSession(ctx, spec, backend.SessionStartRequest{
+			SessionID: sessionID,
+			Cwd:       req.Cwd,
+			Env:       req.Env,
+		})
+		if err != nil {
+			return Session{}, err
+		}
+	}
+
+	diagnostics := toPublicDiagnostics(selection.Diagnostics)
+	session := Session{
+		ID:          sessionID,
+		Selected:    Provider(selection.Provider),
+		Diagnostics: diagnostics,
+		CreatedAt:   time.Now().UTC(),
+		State:       SessionStateActive,
+	}
+
+	s.mu.Lock()
+	s.sessions[sessionID] = &managedSession{
+		session:        session,
+		backend:        selection.Backend,
+		sessionBackend: sessionBackend,
+		handle:         sessionHandle,
+		spec:           spec,
+		defaultCwd:     req.Cwd,
+		defaultEnv:     cloneMap(req.Env),
+	}
+	s.mu.Unlock()
+
+	emit(req.OnEvent, Event{Kind: "session.start.completed", Message: "session started", Done: true})
+	return cloneSession(session), nil
+}
+
+// ExecInSession executes a command in a previously created session.
+func (s *Service) ExecInSession(ctx context.Context, req ExecInSessionRequest) (ExecResult, error) {
+	if req.Command == "" {
+		return ExecResult{}, fmt.Errorf("command is required")
+	}
+	s.mu.RLock()
+	record, ok := s.sessions[req.SessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return ExecResult{}, fmt.Errorf("session not found: %s", req.SessionID)
+	}
+	if record.session.State != SessionStateActive {
+		return ExecResult{}, fmt.Errorf("session is not active: %s", req.SessionID)
+	}
+
+	execCtx := ctx
+	timeout := time.Duration(0)
+	if req.TimeoutSeconds > 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+		var cancel context.CancelFunc
+		execCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	emit(req.OnEvent, Event{Kind: "session.exec.running", Message: fmt.Sprintf("executing via %s", record.backend.Name())})
+	var beResult backend.ExecResult
+	var err error
+	if record.sessionBackend != nil {
+		beResult, err = record.sessionBackend.ExecInSession(execCtx, record.spec, record.handle, backend.ExecRequest{
+			Command: req.Command,
+			Cwd:     req.Cwd,
+			Env:     req.Env,
+			Timeout: timeout,
+		})
+	} else {
+		effectiveCwd := req.Cwd
+		if effectiveCwd == "" {
+			effectiveCwd = record.defaultCwd
+		}
+		effectiveEnv := cloneMap(record.defaultEnv)
+		for k, v := range req.Env {
+			effectiveEnv[k] = v
+		}
+		beResult, err = record.backend.Exec(execCtx, record.spec, backend.ExecRequest{
+			Command: req.Command,
+			Cwd:     effectiveCwd,
+			Env:     effectiveEnv,
+			Timeout: timeout,
+		})
+	}
+	if err != nil {
+		return ExecResult{}, err
+	}
+
+	result := ExecResult{
+		Stdout:      beResult.Stdout,
+		Stderr:      beResult.Stderr,
+		ExitCode:    beResult.ExitCode,
+		Selected:    record.session.Selected,
+		Diagnostics: cloneDiagnostics(record.session.Diagnostics),
+	}
+	emit(req.OnEvent, Event{Kind: "session.exec.completed", Message: "command execution completed", Done: true})
+	return result, nil
+}
+
+// StopSession stops and removes a managed session.
+func (s *Service) StopSession(ctx context.Context, req StopSessionRequest) error {
+	s.mu.Lock()
+	record, ok := s.sessions[req.SessionID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("session not found: %s", req.SessionID)
+	}
+	if record.session.State == SessionStateStopped {
+		s.mu.Unlock()
+		return nil
+	}
+	record.session.State = SessionStateStopped
+	s.mu.Unlock()
+
+	if record.sessionBackend != nil {
+		emit(req.OnEvent, Event{Kind: "session.stop.backend", Message: fmt.Sprintf("stopping %s session", record.backend.Name())})
+		if err := record.sessionBackend.StopSession(ctx, record.spec, record.handle); err != nil {
+			return err
+		}
+	}
+
+	emit(req.OnEvent, Event{Kind: "session.stop.completed", Message: "session stopped", Done: true})
+	return nil
+}
+
+// GetSession returns session metadata by id.
+func (s *Service) GetSession(_ context.Context, sessionID string) (Session, error) {
+	s.mu.RLock()
+	record, ok := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return Session{}, fmt.Errorf("session not found: %s", sessionID)
+	}
+	return cloneSession(record.session), nil
+}
+
 func (s *Service) resolveProjectRuntime(projectRootInput string, providerOverride Provider, requireInitialized bool) (string, config.Config, string, error) {
 	projectRoot, err := resolveProjectRoot(projectRootInput)
 	if err != nil {
@@ -389,12 +571,56 @@ func toInternalProvider(p Provider) config.Provider {
 	return config.NormalizeProvider(config.Provider(p))
 }
 
+func (s *Service) selectBackendAndSpec(
+	ctx context.Context,
+	cfg config.Config,
+	providerOverride Provider,
+	projectRoot string,
+	baseRaw string,
+	streams backend.IOStreams,
+) (backend.Selection, backend.RuntimeSpec, error) {
+	off := offbackend.New()
+	appleVM := macosbackend.New()
+	docker := dockerbackend.New()
+
+	provider := Provider(cfg.Provider)
+	var err error
+	if providerOverride != "" {
+		provider, err = normalizeProvider(providerOverride)
+		if err != nil {
+			return backend.Selection{}, backend.RuntimeSpec{}, err
+		}
+	}
+	selection, err := backend.Select(ctx, toInternalProvider(provider), off, appleVM, docker)
+	if err != nil {
+		return backend.Selection{}, backend.RuntimeSpec{}, err
+	}
+
+	spec := backend.RuntimeSpec{
+		ProjectRoot: projectRoot,
+		ProjectName: filepath.Base(projectRoot),
+		Config:      cfg,
+		BaseRawPath: baseRaw,
+		InstanceRaw: config.InstanceDiskPath(projectRoot),
+		IO:          streams,
+	}
+	return selection, spec, nil
+}
+
 func fromInternalDiag(d backend.ProbeResult) BackendDiagnostic {
 	return BackendDiagnostic{
 		Available: d.Available,
 		Reason:    d.Reason,
 		FixHints:  d.FixHints,
 	}
+}
+
+func toPublicDiagnostics(in map[string]backend.ProbeResult) map[string]BackendDiagnostic {
+	out := make(map[string]BackendDiagnostic, len(in))
+	for name, d := range in {
+		out[name] = fromInternalDiag(d)
+	}
+	return out
 }
 
 func toPublicImage(d image.Descriptor) Image {
@@ -412,4 +638,44 @@ func emit(handler EventHandler, e Event) {
 	if handler != nil {
 		handler(e)
 	}
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneDiagnostics(in map[string]BackendDiagnostic) map[string]BackendDiagnostic {
+	out := make(map[string]BackendDiagnostic, len(in))
+	for k, v := range in {
+		hints := make([]string, len(v.FixHints))
+		copy(hints, v.FixHints)
+		v.FixHints = hints
+		out[k] = v
+	}
+	return out
+}
+
+func cloneSession(in Session) Session {
+	return Session{
+		ID:          in.ID,
+		Selected:    in.Selected,
+		Diagnostics: cloneDiagnostics(in.Diagnostics),
+		CreatedAt:   in.CreatedAt,
+		State:       in.State,
+	}
+}
+
+func newSessionID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "s_" + hex.EncodeToString(buf), nil
 }

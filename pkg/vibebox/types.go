@@ -88,6 +88,48 @@ type ExecRequest struct {
 	OnEvent          EventHandler
 }
 
+// SessionState describes lifecycle status of a managed sandbox session.
+type SessionState string
+
+const (
+	SessionStateActive  SessionState = "active"
+	SessionStateStopped SessionState = "stopped"
+)
+
+// StartSessionRequest creates a reusable sandbox session.
+type StartSessionRequest struct {
+	ProjectRoot      string
+	ProviderOverride Provider
+	Cwd              string
+	Env              map[string]string
+	OnEvent          EventHandler
+}
+
+// Session identifies a managed sandbox session.
+type Session struct {
+	ID          string
+	Selected    Provider
+	Diagnostics map[string]BackendDiagnostic
+	CreatedAt   time.Time
+	State       SessionState
+}
+
+// ExecInSessionRequest executes one command within an existing session.
+type ExecInSessionRequest struct {
+	SessionID      string
+	Command        string
+	Cwd            string
+	Env            map[string]string
+	TimeoutSeconds int
+	OnEvent        EventHandler
+}
+
+// StopSessionRequest stops and removes a managed session.
+type StopSessionRequest struct {
+	SessionID string
+	OnEvent   EventHandler
+}
+
 // BackendDiagnostic describes availability status of one backend.
 type BackendDiagnostic struct {
 	Available bool     `json:"available"`

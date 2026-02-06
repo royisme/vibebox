@@ -71,3 +71,46 @@ func TestExecOffWithoutInit(t *testing.T) {
 		t.Fatalf("unexpected selected provider: %s", result.Selected)
 	}
 }
+
+func TestSessionLifecycleOff(t *testing.T) {
+	t.Parallel()
+	svc := NewService()
+	project := t.TempDir()
+
+	session, err := svc.StartSession(context.Background(), StartSessionRequest{
+		ProjectRoot:      project,
+		ProviderOverride: ProviderOff,
+		Cwd:              ".",
+	})
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	if session.State != SessionStateActive {
+		t.Fatalf("expected active session, got %s", session.State)
+	}
+
+	execResult, err := svc.ExecInSession(context.Background(), ExecInSessionRequest{
+		SessionID: session.ID,
+		Command:   "echo session-ok",
+	})
+	if err != nil {
+		t.Fatalf("exec in session: %v", err)
+	}
+	if execResult.ExitCode != 0 {
+		t.Fatalf("unexpected exit code: %d", execResult.ExitCode)
+	}
+	if !strings.Contains(execResult.Stdout, "session-ok") {
+		t.Fatalf("unexpected stdout: %q", execResult.Stdout)
+	}
+
+	if err := svc.StopSession(context.Background(), StopSessionRequest{SessionID: session.ID}); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	state, err := svc.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if state.State != SessionStateStopped {
+		t.Fatalf("expected stopped state, got %s", state.State)
+	}
+}
