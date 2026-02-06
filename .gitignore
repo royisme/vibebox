@@ -1,0 +1,8 @@
+.works/
+
+bin/
+dist/
+*.log
+.DS_Store
+
+.vibebox/
