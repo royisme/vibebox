@@ -52,8 +52,16 @@ func (b *Backend) Prepare(ctx context.Context, spec backend.RuntimeSpec) error {
 		return nil
 	}
 	pull := exec.CommandContext(ctx, "docker", "pull", spec.Config.Docker.Image)
-	pull.Stdout = os.Stdout
-	pull.Stderr = os.Stderr
+	pullStdout := spec.IO.Stdout
+	pullStderr := spec.IO.Stderr
+	if pullStdout == nil {
+		pullStdout = os.Stderr
+	}
+	if pullStderr == nil {
+		pullStderr = os.Stderr
+	}
+	pull.Stdout = pullStdout
+	pull.Stderr = pullStderr
 	if err := pull.Run(); err != nil {
 		return fmt.Errorf("pull docker image %s: %w", spec.Config.Docker.Image, err)
 	}

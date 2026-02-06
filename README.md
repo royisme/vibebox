@@ -34,6 +34,12 @@ The primary goal is compatibility with Mozi's runtime needs.
 # initialize project (interactive image selection by default)
 vibebox init
 
+# machine-friendly backend probe
+vibebox probe --json --provider auto
+
+# non-interactive command execution (Mozi bridge path)
+vibebox exec --json --provider off --command "echo hello"
+
 # start interactive sandbox
 vibebox up --provider auto
 

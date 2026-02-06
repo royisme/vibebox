@@ -90,9 +90,9 @@ type ExecRequest struct {
 
 // BackendDiagnostic describes availability status of one backend.
 type BackendDiagnostic struct {
-	Available bool
-	Reason    string
-	FixHints  []string
+	Available bool     `json:"available"`
+	Reason    string   `json:"reason"`
+	FixHints  []string `json:"fixHints"`
 }
 
 // ProbeResult reports selection outcome and diagnostics.
