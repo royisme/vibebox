@@ -28,8 +28,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.8
-          install-mode: goinstall
+          version: v2.8.0
           args: ./...
 
       - name: Test
